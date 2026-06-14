@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { bookSlot } from "@/lib/calcom";
 
 interface BookingPayload {
   name: string;
   phone: string;
   address: string;
   when: string;
+  isoStart?: string;  // ISO datetime passed from booking form
   note?: string;
   source?: string;
   photos?: string[];
@@ -141,6 +143,15 @@ export async function POST(req: NextRequest) {
       persistLead(data),
       notifyOwner(data),
       sendSMSNotification(data),
+      data.isoStart
+        ? bookSlot({
+            slotISO: data.isoStart,
+            name: data.name,
+            phone: data.phone,
+            notes: [data.note, data.address].filter(Boolean).join(" | "),
+            metadata: { source: data.source ?? "web" },
+          })
+        : Promise.resolve(),
     ]);
 
     return NextResponse.json({ ok: true });

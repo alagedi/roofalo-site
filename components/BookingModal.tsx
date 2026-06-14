@@ -119,19 +119,35 @@ export function BookingModal({ open, prefillAddress, onClose }: BookingModalProp
   async function confirmBooking() {
     setSubmitting(true);
     const chosenDay = day !== null ? days[day] : null;
+    const when = chosenDay ? `${DOW[chosenDay.getDay()]}, ${MON[chosenDay.getMonth()]} ${chosenDay.getDate()} · ${slot}` : "";
+
+    // Compute ISO start in ET for Cal.com
+    let isoStart: string | undefined;
+    if (chosenDay && slot) {
+      const [timePart, period] = slot.split(" ");
+      const [hStr, mStr] = timePart.split(":");
+      let h = parseInt(hStr);
+      const m = parseInt(mStr || "0");
+      if (period === "PM" && h !== 12) h += 12;
+      if (period === "AM" && h === 12) h = 0;
+      const y = chosenDay.getFullYear();
+      const mo = String(chosenDay.getMonth() + 1).padStart(2, "0");
+      const d = String(chosenDay.getDate()).padStart(2, "0");
+      isoStart = `${y}-${mo}-${d}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00-04:00`;
+    }
+
     try {
       await fetch("/api/book", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name, phone, address: addr, note,
-          when: chosenDay ? `${DOW[chosenDay.getDay()]}, ${MON[chosenDay.getMonth()]} ${chosenDay.getDate()} · ${slot}` : "",
+          name, phone, address: addr, note, when, isoStart,
           source: "web",
           turnstileToken,
         }),
       });
     } catch {
-      // proceed to confirmation even if request fails (lead is best-effort on frontend)
+      // proceed to confirmation even if request fails
     }
     setStep(2);
     setSubmitting(false);
