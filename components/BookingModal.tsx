@@ -53,19 +53,30 @@ export function BookingModal({ open, prefillAddress, onClose }: BookingModalProp
 
   useEffect(() => { if (open) setAddr(prefillAddress || ""); }, [open, prefillAddress]);
 
-  // Render Turnstile widget when step 1 mounts
+  // Render Turnstile widget when step 1 mounts — retry until script loads (lazyOnload)
   useEffect(() => {
-    if (step !== 1 || !turnstileRef.current || !SITE_KEY) return;
-    const win = window as typeof window & { turnstile?: { render: (el: HTMLElement, opts: object) => string; remove: (id: string) => void } };
-    if (!win.turnstile) return;
-    if (turnstileWidgetId.current) win.turnstile.remove(turnstileWidgetId.current);
-    turnstileWidgetId.current = win.turnstile.render(turnstileRef.current, {
-      sitekey: SITE_KEY,
-      callback: (token: string) => setTurnstileToken(token),
-      "expired-callback": () => setTurnstileToken(""),
-      theme: "light",
-      size: "normal",
-    });
+    if (step !== 1 || !SITE_KEY) return;
+    type TurnstileWin = typeof window & { turnstile?: { render: (el: HTMLElement, opts: object) => string; remove: (id: string) => void } };
+    let attempts = 0;
+    const tryRender = () => {
+      if (!turnstileRef.current) return;
+      const win = window as TurnstileWin;
+      if (!win.turnstile) {
+        if (attempts++ < 20) setTimeout(tryRender, 300);
+        return;
+      }
+      if (turnstileWidgetId.current) {
+        try { win.turnstile.remove(turnstileWidgetId.current); } catch { /* ignore */ }
+      }
+      turnstileWidgetId.current = win.turnstile.render(turnstileRef.current, {
+        sitekey: SITE_KEY,
+        callback: (token: string) => setTurnstileToken(token),
+        "expired-callback": () => setTurnstileToken(""),
+        theme: "light",
+        size: "normal",
+      });
+    };
+    tryRender();
   }, [step, SITE_KEY]);
   useEffect(() => {
     if (open) {
@@ -86,10 +97,9 @@ export function BookingModal({ open, prefillAddress, onClose }: BookingModalProp
   if (!open) return null;
 
   const phoneOk = phone.replace(/\D/g, "").length === 10;
-  const turnstileOk = !SITE_KEY || !!turnstileToken;
   const canContinue =
     step === 0 ? day !== null && slot !== null :
-    step === 1 ? name.trim() && phoneOk && addr.trim() && turnstileOk :
+    step === 1 ? !!(name.trim() && phoneOk && addr.trim()) :
     true;
 
   function addPhotos(e: React.ChangeEvent<HTMLInputElement>) {

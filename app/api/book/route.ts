@@ -81,20 +81,28 @@ async function sendSMSNotification(data: BookingPayload) {
   const apiKey = process.env.TELNYX_API_KEY;
   const from = process.env.TELNYX_FROM;
   const ownerPhone = process.env.OWNER_NOTIFY_PHONE;
+  const messagingProfileId = process.env.TELNYX_MESSAGING_PROFILE_ID;
   if (!apiKey || !from || !ownerPhone) return;
 
   const text = `New Roofalo booking!\n${data.name} · ${data.phone}\n${data.address}\n${data.when}`;
+  const body: Record<string, string> = { from, to: ownerPhone, text };
+  if (messagingProfileId) body.messaging_profile_id = messagingProfileId;
+
   try {
-    await fetch("https://api.telnyx.com/v2/messages", {
+    const res = await fetch("https://api.telnyx.com/v2/messages", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ from, to: ownerPhone, text }),
+      body: JSON.stringify(body),
     });
-  } catch {
-    // Non-blocking
+    if (!res.ok) {
+      const err = await res.text();
+      console.error("[Telnyx SMS] failed", res.status, err);
+    }
+  } catch (e) {
+    console.error("[Telnyx SMS] exception", e);
   }
 }
 
@@ -122,9 +130,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "name, phone, address required" }, { status: 400 });
     }
 
-    // Verify Turnstile if secret is configured
-    if (process.env.TURNSTILE_SECRET_KEY) {
-      const ok = await verifyTurnstile(data.turnstileToken ?? "");
+    // Verify Turnstile only when token is present (widget loaded successfully)
+    if (process.env.TURNSTILE_SECRET_KEY && data.turnstileToken) {
+      const ok = await verifyTurnstile(data.turnstileToken);
       if (!ok) return NextResponse.json({ error: "bot check failed" }, { status: 403 });
     }
 

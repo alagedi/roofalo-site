@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Pin, Bolt, ArrowRight, Calendar, Wallet, CheckCircle, Search } from "./Icons";
 
 function hashStr(s: string): number {
@@ -185,8 +186,10 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activeIdx, setActiveIdx] = useState(-1);
   const [dropOpen, setDropOpen] = useState(false);
+  const [dropRect, setDropRect] = useState<{ top: number; left: number; width: number } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [showPrice, setShowPrice] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
   const [sqft, setSqft] = useState(0);
@@ -221,7 +224,13 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
         const res = await fetch(`/api/places?q=${encodeURIComponent(val)}`);
         const data: Suggestion[] = await res.json();
         setSuggestions(data);
-        setDropOpen(data.length > 0);
+        if (data.length > 0 && inputRef.current) {
+          const r = inputRef.current.getBoundingClientRect();
+          setDropRect({ top: r.bottom + window.scrollY + 6, left: r.left + window.scrollX, width: r.width });
+          setDropOpen(true);
+        } else {
+          setDropOpen(false);
+        }
         setActiveIdx(-1);
       } catch { /* silent */ }
     }, 280);
@@ -319,11 +328,18 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
         <div className="rc-inputrow" ref={wrapRef} style={{ position: "relative" }}>
           <span className="rc-pin"><Pin size={22} /></span>
           <input
+            ref={inputRef}
             className="rc-input"
             value={addr}
             onChange={(e) => { setAddr(e.target.value); fetchSuggestions(e.target.value); }}
             onKeyDown={handleKeyDown}
-            onFocus={() => suggestions.length > 0 && setDropOpen(true)}
+            onFocus={() => {
+              if (suggestions.length > 0 && inputRef.current) {
+                const r = inputRef.current.getBoundingClientRect();
+                setDropRect({ top: r.bottom + window.scrollY + 6, left: r.left + window.scrollX, width: r.width });
+                setDropOpen(true);
+              }
+            }}
             placeholder="Type your address…"
             autoComplete="off"
             aria-label="Your home address"
@@ -337,20 +353,20 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
             <ArrowRight size={20} />
           </button>
 
-          {dropOpen && suggestions.length > 0 && (
+          {dropOpen && suggestions.length > 0 && dropRect && createPortal(
             <ul
               id="rc-suggestions"
               role="listbox"
               style={{
                 position: "absolute",
-                top: "calc(100% + 6px)",
-                left: 0,
-                right: 0,
+                top: dropRect.top,
+                left: dropRect.left,
+                width: dropRect.width,
                 background: "#fff",
-                border: "1.5px solid var(--line)",
-                borderRadius: "var(--r)",
-                boxShadow: "var(--shadow-md)",
-                zIndex: 200,
+                border: "1.5px solid #d6cfc5",
+                borderRadius: 10,
+                boxShadow: "0 8px 32px rgba(0,0,0,0.13)",
+                zIndex: 9999,
                 listStyle: "none",
                 margin: 0,
                 padding: "6px 0",
@@ -368,18 +384,19 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
                     padding: "10px 16px",
                     cursor: "pointer",
                     fontSize: 14,
-                    color: "var(--ink)",
-                    background: i === activeIdx ? "var(--bone)" : "transparent",
+                    color: "#1a1714",
+                    background: i === activeIdx ? "#f5f0ea" : "transparent",
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
                   }}
                 >
-                  <Pin size={14} style={{ color: "var(--copper)", flexShrink: 0 }} />
+                  <Pin size={14} style={{ color: "#c07838", flexShrink: 0 }} />
                   {s.label}
                 </li>
               ))}
-            </ul>
+            </ul>,
+            document.body
           )}
         </div>
         <div className="rc-hint">
