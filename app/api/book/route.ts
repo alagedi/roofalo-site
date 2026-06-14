@@ -8,6 +8,7 @@ interface BookingPayload {
   note?: string;
   source?: string;
   photos?: string[];
+  turnstileToken?: string;
 }
 
 async function persistLead(data: BookingPayload) {
@@ -97,12 +98,34 @@ async function sendSMSNotification(data: BookingPayload) {
   }
 }
 
+async function verifyTurnstile(token: string): Promise<boolean> {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) return true; // skip if not configured
+  try {
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret, response: token }),
+    });
+    const data = await res.json();
+    return data.success === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const data: BookingPayload = await req.json();
 
     if (!data.name || !data.phone || !data.address) {
       return NextResponse.json({ error: "name, phone, address required" }, { status: 400 });
+    }
+
+    // Verify Turnstile if secret is configured
+    if (process.env.TURNSTILE_SECRET_KEY) {
+      const ok = await verifyTurnstile(data.turnstileToken ?? "");
+      if (!ok) return NextResponse.json({ error: "bot check failed" }, { status: 403 });
     }
 
     // Fire lead pipeline — all parallel, all non-blocking

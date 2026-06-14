@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { Pin, Bolt, ArrowRight, Calendar, Wallet, CheckCircle, Search } from "./Icons";
 
 function hashStr(s: string): number {
@@ -176,10 +176,17 @@ interface RoofCheckResult {
   imageUrl?: string;
 }
 
+interface Suggestion { label: string; placeId: string }
+
 export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [addr, setAddr] = useState("");
   const [submitted, setSubmitted] = useState("");
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const [dropOpen, setDropOpen] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const [showPrice, setShowPrice] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
   const [sqft, setSqft] = useState(0);
@@ -194,6 +201,54 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
       pitch: ["4:12", "6:12", "7:12", "8:12"][Math.floor(rnd() * 4)],
     };
   }, [submitted]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setDropOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const fetchSuggestions = useCallback((val: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (val.length < 3) { setSuggestions([]); setDropOpen(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/places?q=${encodeURIComponent(val)}`);
+        const data: Suggestion[] = await res.json();
+        setSuggestions(data);
+        setDropOpen(data.length > 0);
+        setActiveIdx(-1);
+      } catch { /* silent */ }
+    }, 280);
+  }, []);
+
+  function pickSuggestion(label: string) {
+    setAddr(label);
+    setSuggestions([]);
+    setDropOpen(false);
+    setActiveIdx(-1);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!dropOpen || suggestions.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, -1));
+    } else if (e.key === "Enter" && activeIdx >= 0) {
+      e.preventDefault();
+      pickSuggestion(suggestions[activeIdx].label);
+    } else if (e.key === "Escape") {
+      setDropOpen(false);
+    }
+  }
 
   const fetchRoofData = useCallback(async (address: string) => {
     try {
@@ -261,20 +316,71 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
   if (phase === "idle") {
     return (
       <form onSubmit={start} className="rc">
-        <div className="rc-inputrow">
+        <div className="rc-inputrow" ref={wrapRef} style={{ position: "relative" }}>
           <span className="rc-pin"><Pin size={22} /></span>
           <input
             className="rc-input"
             value={addr}
-            onChange={(e) => setAddr(e.target.value)}
+            onChange={(e) => { setAddr(e.target.value); fetchSuggestions(e.target.value); }}
+            onKeyDown={handleKeyDown}
+            onFocus={() => suggestions.length > 0 && setDropOpen(true)}
             placeholder="Type your address…"
-            autoComplete="street-address"
+            autoComplete="off"
             aria-label="Your home address"
+            aria-autocomplete="list"
+            aria-expanded={dropOpen}
+            aria-controls="rc-suggestions"
+            role="combobox"
           />
           <button type="submit" className="btn btn-primary rc-go">
             <span>See my roof</span>
             <ArrowRight size={20} />
           </button>
+
+          {dropOpen && suggestions.length > 0 && (
+            <ul
+              id="rc-suggestions"
+              role="listbox"
+              style={{
+                position: "absolute",
+                top: "calc(100% + 6px)",
+                left: 0,
+                right: 0,
+                background: "#fff",
+                border: "1.5px solid var(--line)",
+                borderRadius: "var(--r)",
+                boxShadow: "var(--shadow-md)",
+                zIndex: 200,
+                listStyle: "none",
+                margin: 0,
+                padding: "6px 0",
+                overflow: "hidden",
+              }}
+            >
+              {suggestions.map((s, i) => (
+                <li
+                  key={s.placeId}
+                  role="option"
+                  aria-selected={i === activeIdx}
+                  onMouseDown={(e) => { e.preventDefault(); pickSuggestion(s.label); }}
+                  onMouseEnter={() => setActiveIdx(i)}
+                  style={{
+                    padding: "10px 16px",
+                    cursor: "pointer",
+                    fontSize: 14,
+                    color: "var(--ink)",
+                    background: i === activeIdx ? "var(--bone)" : "transparent",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <Pin size={14} style={{ color: "var(--copper)", flexShrink: 0 }} />
+                  {s.label}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <div className="rc-hint">
           <Bolt size={14} />
