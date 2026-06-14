@@ -169,12 +169,15 @@ type Phase = "idle" | "scanning" | "result";
 
 interface RoofCheckResult {
   measured: boolean;
-  sqft?: number;
+  areaSqFt?: number;
   facets?: number;
   pitch?: string;
+  squares?: number;
   low?: number;
   high?: number;
   imageUrl?: string;
+  lat?: number;
+  lng?: number;
 }
 
 interface Suggestion { label: string; placeId: string }
@@ -194,6 +197,7 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
   const [stepIdx, setStepIdx] = useState(0);
   const [sqft, setSqft] = useState(0);
   const [result, setResult] = useState<RoofCheckResult | null>(null);
+  const [imgFailed, setImgFailed] = useState(false);
 
   const localData = useMemo(() => {
     const rnd = mulberry32(hashStr(submitted || "x") || 1);
@@ -282,6 +286,7 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
     setShowPrice(false);
     setStepIdx(0);
     setResult(null);
+    setImgFailed(false);
 
     fetchRoofData(v).then((data) => {
       setResult(data);
@@ -298,7 +303,7 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
 
   useEffect(() => {
     if (phase !== "result") return;
-    const target = result?.sqft ?? localData.sqft;
+    const target = result?.areaSqFt ?? localData.sqft;
     const dur = 1100;
     const t0 = performance.now();
     let raf: number;
@@ -313,9 +318,12 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
     return () => { cancelAnimationFrame(raf); clearTimeout(guarantee); };
   }, [phase, result, localData.sqft]);
 
-  const displayData = result?.measured ? result : {
-    measured: false,
-    sqft: localData.sqft,
+  const displayData = result?.measured ? {
+    facets: result.facets,
+    pitch: result.pitch,
+    low: result.low,
+    high: result.high,
+  } : {
     facets: localData.facets,
     pitch: localData.pitch,
     low: Math.round((localData.sqft * 4.6) / 100) * 100,
@@ -410,10 +418,43 @@ export function RoofCheck({ onBook }: { onBook: (addr: string) => void }) {
   return (
     <div className="rc-viewer card reveal" role="status" aria-live="polite">
       <div className="rc-stage">
-        <FauxSatellite address={submitted} phase={phase === "scanning" ? "scanning" : "result"} />
+        {result?.imageUrl && !imgFailed ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={result.imageUrl}
+              alt={`Aerial satellite view of ${submitted}`}
+              className="rc-sat-img"
+              onError={() => setImgFailed(true)}
+              style={{ filter: phase === "scanning" ? "brightness(0.82) contrast(1.05)" : "none" }}
+            />
+            {phase === "scanning" && <div className="rc-scan-fx" aria-hidden="true" />}
+            {phase === "result" && result.measured && (
+              <svg className="rc-measure-fx" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                {[
+                  "M30,32 L30,28 L34,28", "M66,28 L70,28 L70,32",
+                  "M70,68 L70,72 L66,72", "M34,72 L30,72 L30,68",
+                ].map((d, i) => (
+                  <path key={i} d={d} fill="none" stroke="#f0a04b" strokeWidth="1.4"
+                    strokeLinecap="round" strokeLinejoin="round"
+                    style={{ opacity: 0, animation: `facetFade .4s ease forwards ${0.15 * i}s` }} />
+                ))}
+                <rect x="30" y="28" width="40" height="44" fill="#f0a04b" fillOpacity="0.07"
+                  stroke="#f0a04b" strokeOpacity="0.5" strokeWidth="0.6" strokeDasharray="2 2"
+                  style={{ opacity: 0, animation: "facetFade .5s ease forwards .7s" }} />
+              </svg>
+            )}
+          </>
+        ) : (
+          <FauxSatellite address={submitted} phase={phase === "scanning" ? "scanning" : "result"} />
+        )}
         <span className="rc-badge-loc"><Pin size={13} /> {submitted}</span>
         <span className="rc-badge-src">
-          {result?.measured ? "Google Solar API · real data" : "Aerial preview · estimated"}
+          {result?.measured
+            ? "Google Solar API · real measurements"
+            : result?.imageUrl && !imgFailed
+            ? "Live satellite imagery"
+            : "Aerial preview · estimated"}
         </span>
         {phase === "scanning" && (
           <div className="rc-scanlabel">

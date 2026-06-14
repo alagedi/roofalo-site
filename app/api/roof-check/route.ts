@@ -13,6 +13,15 @@ interface SolarInsights {
   areaSqFt: number;
   facets: number;
   pitch: string;
+  squares: number;
+  center: GeocodingResult | null;
+}
+
+const SQ_FT_PER_M2 = 10.7639;
+
+interface RoofSegment {
+  pitchDegrees?: number;
+  stats?: { areaMeters2?: number };
 }
 
 async function geocodeAddress(address: string): Promise<GeocodingResult | null> {
@@ -30,38 +39,50 @@ async function geocodeAddress(address: string): Promise<GeocodingResult | null> 
 
 async function getSolarInsights(lat: number, lng: number): Promise<SolarInsights | null> {
   if (!GOOGLE_MAPS_API_KEY) return null;
-  const url = `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&requiredQuality=MEDIUM&key=${GOOGLE_MAPS_API_KEY}`;
+  const url = `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${lat}&location.longitude=${lng}&requiredQuality=HIGH&key=${GOOGLE_MAPS_API_KEY}`;
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
 
-    const roofSegments = data.solarPotential?.roofSegmentStats ?? [];
-    if (!roofSegments.length) return null;
+    const sp = data.solarPotential;
+    const segments: RoofSegment[] = sp?.roofSegmentStats ?? [];
+    if (!segments.length) return null;
 
-    const totalAreaM2: number = roofSegments.reduce((sum: number, seg: { stats?: { areaMeters2?: number } }) => {
-      return sum + (seg.stats?.areaMeters2 ?? 0);
-    }, 0);
-    const areaSqFt = Math.round(totalAreaM2 * 10.764);
+    // Filter out noise segments smaller than ~2 m² (≈21 ft²)
+    const real = segments.filter((s) => (s.stats?.areaMeters2 ?? 0) >= 2);
+    const usable = real.length ? real : segments;
 
-    const pitchValues: number[] = roofSegments
-      .map((seg: { pitchDegrees?: number }) => seg.pitchDegrees ?? 0)
-      .filter((p: number) => p > 0);
-    const avgPitchDeg = pitchValues.length
-      ? pitchValues.reduce((a: number, b: number) => a + b, 0) / pitchValues.length
-      : 30;
-    const rise = Math.round(Math.tan((avgPitchDeg * Math.PI) / 180) * 12);
-    const pitch = `${Math.max(2, Math.min(rise, 12))}:12`;
+    // Roof area: prefer Google's authoritative whole-roof total (actual sloped
+    // surface, accounting for pitch). Fall back to summing segment areas.
+    const wholeAreaM2: number = sp?.wholeRoofStats?.areaMeters2
+      ?? usable.reduce((sum, s) => sum + (s.stats?.areaMeters2 ?? 0), 0);
+    const areaSqFt = Math.round(wholeAreaM2 * SQ_FT_PER_M2);
 
-    return { areaSqFt, facets: roofSegments.length, pitch };
+    // Pitch: area-weighted average across real segments (more accurate than a
+    // plain mean, which lets tiny flat segments skew the result).
+    const weightTotal = usable.reduce((sum, s) => sum + (s.stats?.areaMeters2 ?? 0), 0);
+    const weightedPitch = weightTotal
+      ? usable.reduce((sum, s) => sum + (s.pitchDegrees ?? 0) * (s.stats?.areaMeters2 ?? 0), 0) / weightTotal
+      : 25;
+    const rise = Math.round(Math.tan((weightedPitch * Math.PI) / 180) * 12);
+    const pitch = `${Math.max(1, Math.min(rise, 12))}:12`;
+
+    // Building center (more accurate than the geocoded street point for imagery).
+    const center: GeocodingResult | null = data.center
+      ? { lat: data.center.latitude, lng: data.center.longitude }
+      : null;
+
+    return {
+      areaSqFt,
+      facets: usable.length,
+      pitch,
+      squares: Math.round((areaSqFt / 100) * 10) / 10, // roofing "squares" (100 ft² each)
+      center,
+    };
   } catch {
     return null;
   }
-}
-
-async function getStaticMapUrl(lat: number, lng: number): Promise<string | null> {
-  if (!GOOGLE_MAPS_API_KEY) return null;
-  return `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=19&size=600x450&maptype=satellite&key=${GOOGLE_MAPS_API_KEY}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -76,10 +97,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ measured: false });
     }
 
-    const [solar, imageUrl] = await Promise.all([
-      getSolarInsights(geo.lat, geo.lng),
-      getStaticMapUrl(geo.lat, geo.lng),
-    ]);
+    const solar = await getSolarInsights(geo.lat, geo.lng);
+
+    // Center imagery on the building footprint when Solar gives us one;
+    // otherwise on the geocoded street point. Image is served via our proxy
+    // so the API key is never exposed to the browser.
+    const imgCenter = solar?.center ?? geo;
+    const imageUrl = `/api/roof-image?lat=${imgCenter.lat}&lng=${imgCenter.lng}`;
 
     if (!solar) {
       return NextResponse.json({ measured: false, imageUrl, lat: geo.lat, lng: geo.lng });
@@ -93,11 +117,12 @@ export async function POST(req: NextRequest) {
       areaSqFt: solar.areaSqFt,
       facets: solar.facets,
       pitch: solar.pitch,
+      squares: solar.squares,
       low,
       high,
       imageUrl,
-      lat: geo.lat,
-      lng: geo.lng,
+      lat: imgCenter.lat,
+      lng: imgCenter.lng,
     });
   } catch {
     return NextResponse.json({ measured: false });
